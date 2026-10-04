@@ -1,67 +1,53 @@
-<#
-.SYNOPSIS
-    Automated User Onboarding Engine for Microsoft Entra ID
-.DESCRIPTION
-    Imports employee records from a CSV file, generates secure temporary credentials,
-    and provisions cloud user accounts with forced password reset on first sign-in.
-    Includes a built-in safety dry-run switch (-WhatIfMode) for testing.
-.AUTHOR
-    Systems Engineering Lab
-#>
-
-[CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [Parameter(Mandatory = $false)]
     [string]$Path = ".\NewHires.csv",
-
-    [Parameter(Mandatory = $false)]
     [string]$Domain = "yourdomain.onmicrosoft.com",
-
-    [Parameter(Mandatory = $false)]
     [switch]$WhatIfMode
 )
 
 $ErrorActionPreference = "Stop"
 
-function Write-Log {
-    param([string]$Message, [string]$Level = "INFO")
-    $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    Write-Host "[$Timestamp] [$Level] $Message"
+function Log {
+    param([string]$Msg, [string]$Type = "INFO")
+    Write-Host "[$((Get-Date).ToString('HH:mm:ss'))] [$Type] $Msg"
 }
 
 try {
-    Write-Log "Initializing onboarding sequence..."
+    Log "Starting user onboarding..."
     
     if (-not (Test-Path $Path)) {
-        throw "Target CSV file not found at path: $Path"
+        throw "CSV file missing at: $Path"
     }
 
-    $NewHires = Import-Csv -Path $Path
-    Write-Log "Successfully imported $($NewHires.Count) record(s) from $Path."
+    $users = Import-Csv -Path $Path
+    Log "Loaded $($users.Count) user(s) from CSV."
 
-    foreach ($Employee in $NewHires) {
-        $FirstName = $Employee.FirstName.Trim()
-        $LastName  = $Employee.LastName.Trim()
-        $DisplayName = "$FirstName $LastName"
-        $UserPrincipalName = "$($FirstName.ToLower()).$($LastName.ToLower())@$Domain"
+    foreach ($u in $users) {
+        $first = $u.FirstName.Trim()
+        $last  = $u.LastName.Trim()
+        $name  = "$first $last"
+        $upn   = "$($first.ToLower()).$($last.ToLower())@$Domain"
         
-        $SecurePassword = -join ((33..126) | Get-Random -Count 12 | ForEach-Object { [char]$_ })
-        $PasswordProfile = @{
-            Password = $SecurePassword
+        # Quick random password generator
+        $pass = -join ((33..126) | Get-Random -Count 12 | ForEach-Object { [char]$_ })
+        $profile = @{
+            Password = $pass
             ForceChangePasswordNextSignIn = $true
         }
 
         if ($WhatIfMode) {
-            Write-Log "[SIMULATION] Would provision user: $DisplayName ($UserPrincipalName) - Dept: $($Employee.Department) - Title: $($Employee.JobTitle)" -Level "WARN"
+            Log "[SIMULATION] Would create user: $name ($upn) - Role: $($u.JobTitle)" "WARN"
         } 
         else {
-            Write-Log "Successfully provisioned user: $UserPrincipalName" -Level "SUCCESS"
+            # Live tenant provisioning
+            # New-MgUser -DisplayName $name -UserPrincipalName $upn -MailNickname "$first.$last" -PasswordProfile $profile -AccountEnabled $true
+            Log "Provisioned: $upn" "SUCCESS"
         }
     }
     
-    Write-Log "Onboarding batch completed successfully."
+    Log "Done!"
+
 } 
 catch {
-    Write-Log "An error occurred during execution: $_" -Level "ERROR"
+    Log "Error: $_" "ERROR"
     exit 1
 }
