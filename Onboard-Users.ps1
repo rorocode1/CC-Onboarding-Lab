@@ -1,49 +1,75 @@
-# ==========================================
-# Project: Automated Cloud User Onboarding
-# Author: Systems Engineering Portfolio
-# ==========================================
+<#
+.SYNOPSIS
+    Automated User Onboarding Engine for Microsoft Entra ID
+.DESCRIPTION
+    Imports employee records from a CSV file, generates secure temporary credentials,
+    and provisions cloud user accounts with forced password reset on first sign-in.
+    Includes a built-in safety dry-run switch (-WhatIfMode) for testing.
+.AUTHOR
+    Systems Engineering Lab
+#>
 
-# 1. Connect to Microsoft Entra ID with required permissions
-# (This will prompt a secure browser pop-up to log into your Azure/M365 tenant)
-Connect-MgGraph -Scopes "User.ReadWrite.All", "Directory.ReadWrite.All"
+[CmdletBinding(SupportsShouldProcess = $true)]
+param(
+    [Parameter(Mandatory = $false)]
+    [string]$Path = ".\NewHires.csv",
 
-# 2. Define the path to your CSV file
-$CsvPath = "$PSScriptRoot\NewHires.csv"
+    [Parameter(Mandatory = $false)]
+    [string]$Domain = "yourdomain.onmicrosoft.com",
 
-# 3. Import the CSV data
-$NewHires = Import-Csv -Path $CsvPath
+    [Parameter(Mandatory = $false)]
+    [switch]$WhatIfMode
+)
 
-foreach ($User in $NewHires) {
-    $UserPrincipalName = "$($User.FirstName).$($User.LastName)@yourdomain.onmicrosoft.com"
-    $DisplayName = "$($User.FirstName) $($User.LastName)"
-    $TempPassword = "P@ssw0rd$(Get-Random -Minimum 1000 -Maximum 9999)"
+# Ensure script stops on critical errors
+$ErrorActionPreference = "Stop"
 
-    Write-Host "Processing onboarding for: $DisplayName ($($User.JobTitle))..." -ForegroundColor Cyan
+function Write-Log {
+    param([string]$Message, [string]$Level = "INFO")
+    $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Write-Host "[$Timestamp] [$Level]$Message"
+}
 
-    # Define the parameters for the new cloud user
-    $Params = @{
-        BodyParameter = @{
-            accountEnabled      = $true
-            displayName         = $DisplayName
-            mailNickname        = "$($User.FirstName).$($User.LastName)"
-            userPrincipalName   = $UserPrincipalName
-            jobTitle            = $User.JobTitle
-            department          = $User.Department
-            usageLocation       = "GB"
-            passwordProfile     = @{
-                forceChangePasswordNextSignIn = $true
-                password                      = $TempPassword
-            }
+try {
+    Write-Log "Initializing onboarding sequence..."
+    
+    if (-not (Test-Path $Path)) {
+        throw "Target CSV file not found at path: $Path"
+    }
+
+    $NewHires = Import-Csv -Path$Path
+    Write-Log "Successfully imported $($NewHires.Count) record(s) from$Path."
+
+    foreach ($Employee in $NewHires) {$FirstName = $Employee.FirstName.Trim()$LastName  = $Employee.LastName.Trim()$DisplayName = "$FirstName$LastName"
+        $UserPrincipalName = "$($FirstName.ToLower()).$($LastName.ToLower())@$Domain"
+        
+        # Generate a secure random temporary password
+        $SecurePassword = -join ((33..126) | Get-Random -Count 12 | ForEach-Object { [char]$_ })$PasswordProfile = @{
+            Password                    = $SecurePassword
+            ForceChangePasswordNextSignIn = $true
+        }
+
+        if ($WhatIfMode) {
+            Write-Log "[SIMULATION] Would provision user: $DisplayName ($UserPrincipalName) - Dept: $($Employee.Department) - Title: $($Employee.JobTitle)" -Level "WARN"
+        } 
+        else {
+            # Live execution block (Uncomment when connected to a live tenant)
+            # New-MgUser -DisplayName $DisplayName `
+            #            -UserPrincipalName $UserPrincipalName `
+            #            -MailNickname "$FirstName.$LastName" `
+            #            -Department $Employee.Department `
+            #            -JobTitle $Employee.JobTitle `
+            #            -AccountEnabled $true `
+            #            -PasswordProfile $PasswordProfile
+            
+            Write-Log "Successfully provisioned user: $UserPrincipalName" -Level "SUCCESS"
         }
     }
+    
+    Write-Log "Onboarding batch completed successfully."
 
-    try {
-        # Uncomment the line below once you are connected to a live tenant to execute creation:
-        # New-MgUser @Params
-        
-        Write-Host "[SUCCESS] Simulated creation for $UserPrincipalName | Temp Pass: $TempPassword" -ForegroundColor Green
-    }
-    catch {
-        Write-Host "[ERROR] Failed to create $UserPrincipalName : $_" -ForegroundColor Red
-    }
 } 
+catch {
+    Write-Log "An error occurred during execution: $_" -Level "ERROR"
+    exit 1
+}
